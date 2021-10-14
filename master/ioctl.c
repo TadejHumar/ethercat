@@ -2407,6 +2407,11 @@ static ATTRIBUTES int ec_ioctl_send(
     if (ec_ioctl_lock_down_interruptible(&master->master_sem))
         return -EINTR;
 
+	/* Must take the io_sem to synchronize with EoE thread; the
+     * EoE thread does not hold master_sem when executing the send_cb
+	 */
+    down( & master->io_sem );
+
 #if defined(EC_RTDM) && defined(EC_EOE)
     sent_bytes = ecrt_master_send(master);
 #else
@@ -2416,6 +2421,8 @@ static ATTRIBUTES int ec_ioctl_send(
     } else
         sent_bytes = ecrt_master_send(master);
 #endif
+
+    up( & master->io_sem );
 
     ec_ioctl_lock_up(&master->master_sem);
 
@@ -2447,6 +2454,11 @@ static ATTRIBUTES int ec_ioctl_receive(
     if (ec_ioctl_lock_down_interruptible(&master->master_sem))
         return -EINTR;
 
+	/* Must take the io_sem to synchronize with EoE thread; the
+     * EoE thread does not hold master_sem when executing the receive_cb
+	 */
+    down( & master->io_sem );
+
 #if defined(EC_RTDM) && defined(EC_EOE)
     ecrt_master_receive(master);
 #else
@@ -2455,6 +2467,8 @@ static ATTRIBUTES int ec_ioctl_receive(
     else
         ecrt_master_receive(master);
 #endif
+
+    up( & master->io_sem );
 
     ec_ioctl_lock_up(&master->master_sem);
 
