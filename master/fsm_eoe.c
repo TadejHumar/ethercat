@@ -195,6 +195,7 @@ int ec_fsm_eoe_prepare_set(
     }
     cur += ETH_ALEN;
 
+	/* NOTE: the tool already provides addresses in network-byte order */
     if (req->ip_address_included) {
         uint32_t swapped = req->ip_address;
         memcpy(cur, &swapped, 4);
