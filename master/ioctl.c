@@ -2407,22 +2407,24 @@ static ATTRIBUTES int ec_ioctl_send(
     if (ec_ioctl_lock_down_interruptible(&master->master_sem))
         return -EINTR;
 
-	/* Must take the io_sem to synchronize with EoE thread; the
-     * EoE thread does not hold master_sem when executing the send_cb
-	 */
-    down( & master->io_sem );
-
 #if defined(EC_RTDM) && defined(EC_EOE)
+    down( & master->io_sem );
     sent_bytes = ecrt_master_send(master);
+    up( & master->io_sem );
 #else
     if (master->send_cb != NULL) {
+		/* The internal_callback was installed by the 'activate' ioctl.
+		 * this already uses the io_sem for synchronization with the
+		 * EoE thread. T.S., 2/2022
+		 */
         master->send_cb(master->cb_data);
         sent_bytes = 0;
-    } else
-        sent_bytes = ecrt_master_send(master);
+    } else {
+		down( & master->io_sem );
+		sent_bytes = ecrt_master_send(master);
+		up( & master->io_sem );
+	}
 #endif
-
-    up( & master->io_sem );
 
     ec_ioctl_lock_up(&master->master_sem);
 
@@ -2454,21 +2456,23 @@ static ATTRIBUTES int ec_ioctl_receive(
     if (ec_ioctl_lock_down_interruptible(&master->master_sem))
         return -EINTR;
 
-	/* Must take the io_sem to synchronize with EoE thread; the
-     * EoE thread does not hold master_sem when executing the receive_cb
-	 */
-    down( & master->io_sem );
-
 #if defined(EC_RTDM) && defined(EC_EOE)
+    down( & master->io_sem );
     ecrt_master_receive(master);
+    up( & master->io_sem );
 #else
     if (master->receive_cb != NULL)
-        master->receive_cb(master->cb_data);
-    else
+		/* The internal_callback was installed by the 'activate' ioctl.
+		 * this already uses the io_sem for synchronization with the
+		 * EoE thread. T.S., 2/2022
+		 */
+	     master->receive_cb(master->cb_data);
+    else {
+		down( & master->io_sem );
         ecrt_master_receive(master);
+		up( & master->io_sem );
+	}
 #endif
-
-    up( & master->io_sem );
 
     ec_ioctl_lock_up(&master->master_sem);
 
