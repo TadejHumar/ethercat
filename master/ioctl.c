@@ -2495,7 +2495,9 @@ static ATTRIBUTES int ec_ioctl_send_ext(
         return -EPERM;
     }
 
+    down( & master->io_sem );
     sent_bytes = ecrt_master_send_ext(master);
+    up( & master->io_sem );
 
     if (copy_to_user((void __user *) arg, &sent_bytes, sizeof(sent_bytes))) {
         return -EFAULT;
@@ -2703,7 +2705,9 @@ static ATTRIBUTES int ec_ioctl_64bit_ref_clock_time_queue(
         return -EPERM;
     }
 
+    down( & master->io_sem );
     ecrt_master_64bit_reference_clock_time_queue(master);
+    up( & master->io_sem );
     return 0;
 }
 
