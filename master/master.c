@@ -2049,6 +2049,11 @@ void ec_master_eoe_stop(ec_master_t *master /**< EtherCAT master */)
     if (master->eoe_thread) {
         EC_MASTER_INFO(master, "Stopping EoE thread.\n");
 
+		/* Send a signal - in case the caller hold the master_sem
+		 * (fsm_master); this will wake up the eoe_thread...
+		 */
+		send_sig_info( SIGKILL, SEND_SIG_PRIV, master->eoe_thread );
+
         kthread_stop(master->eoe_thread);
         master->eoe_thread = NULL;
         EC_MASTER_INFO(master, "EoE thread exited.\n");
@@ -2147,11 +2152,16 @@ static int ec_master_eoe_thread(void *priv_data)
 
     EC_MASTER_DBG(master, 1, "EoE thread running.\n");
 
+	allow_signal( SIGKILL );
+
+
     while (!kthread_should_stop()) {
         none_open = 1;
         all_idle = 1;
 
-        ec_lock_down(&master->master_sem);
+        if ( ec_lock_down_interruptible(&master->master_sem) ) {
+			break;
+		}
         list_for_each_entry(eoe, &master->eoe_handlers, list) {
             if (ec_eoe_is_open(eoe)) {
                 none_open = 0;
@@ -2168,7 +2178,9 @@ static int ec_master_eoe_thread(void *priv_data)
         master->receive_cb(master->cb_data);
 
         // actual EoE processing
-        ec_lock_down(&master->master_sem);
+        if ( ec_lock_down_interruptible(&master->master_sem) ) {
+			break;
+		}
         sth_to_send = 0;
         list_for_each_entry(eoe, &master->eoe_handlers, list) {
             if ( eoe->slave && 
@@ -2187,7 +2199,9 @@ static int ec_master_eoe_thread(void *priv_data)
         ec_lock_up(&master->master_sem);
 
         if (sth_to_send) {
-            ec_lock_down(&master->master_sem);
+			if ( ec_lock_down_interruptible(&master->master_sem) ) {
+				break;
+			}
             list_for_each_entry(eoe, &master->eoe_handlers, list) {
                 ec_eoe_queue(eoe);
             }
@@ -2205,6 +2219,19 @@ schedule:
             schedule();
         }
     }
+
+	/* If we broke the loop because we got a signal while
+	 * blocking for the master_sem we still must wait for
+	 * the 'stop' flag...
+	 */
+	for ( ;; ) {
+		set_current_state( TASK_INTERRUPTIBLE );
+		if ( kthread_should_stop() ) {
+			break;
+		}
+		schedule();
+	}
+	__set_current_state( TASK_RUNNING );
 
     EC_MASTER_DBG(master, 1, "EoE thread exiting...\n");
     return 0;
