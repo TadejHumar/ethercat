@@ -117,6 +117,13 @@ void ec_master_find_dc_ref_clock(ec_master_t *);
 void ec_master_clear_device_stats(ec_master_t *);
 void ec_master_update_device_stats(ec_master_t *);
 
+static void ptsnow(void)
+{
+	struct timespec now;
+	getnstimeofday( &now );
+	printk(KERN_INFO "Time now %lu.%09lu\n", now.tv_sec, now.tv_nsec);
+}
+
 /*****************************************************************************/
 
 /** Static variables initializer.
@@ -3021,6 +3028,8 @@ void ecrt_master_deactivate(ec_master_t *master)
 
 /*****************************************************************************/
 
+static int printed = 0;
+
 size_t ecrt_master_send(ec_master_t *master)
 {
     ec_datagram_t *datagram, *n;
@@ -3059,6 +3068,10 @@ size_t ecrt_master_send(ec_master_t *master)
             ec_device_clear_stats(&master->devices[dev_idx]);
             continue;
         }
+		if ( ! printed ) {
+			ptsnow();
+			printed = 1;
+		}
 
         // send frames
         sent_bytes = max(sent_bytes,
@@ -3114,6 +3127,7 @@ void ecrt_master_receive(ec_master_t *master)
                 EC_MASTER_DBG(master, 0, "TIMED OUT datagram %p,"
                         " index %02X waited %u us.\n",
                         datagram, datagram->index, time_us);
+				ptsnow();
             }
 #endif /* RT_SYSLOG */
         }
