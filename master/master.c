@@ -1936,8 +1936,10 @@ static int ec_master_idle_thread(void *priv_data)
 
         ec_lock_up(&master->master_sem);
 
+#ifdef EC_EOE
         // cleanup eoe handers without holding master_sem
         ec_master_gc_eoe_handlers(master);
+#endif
 
         // queue and send
         ec_lock_down(&master->io_sem);
@@ -2008,8 +2010,10 @@ static int ec_master_operation_thread(void *priv_data)
 
             ec_lock_up(&master->master_sem);
 
+#ifdef EC_EOE
             // cleanup eoe handers without holding master_sem
             ec_master_gc_eoe_handlers(master);
+#endif
         }
 
 #ifdef EC_USE_HRTIMER
