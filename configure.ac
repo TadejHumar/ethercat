@@ -111,6 +111,18 @@ AC_ARG_WITH([linux-dir],
     ]
 )
 
+AC_ARG_WITH([linux-extra],
+    AC_HELP_STRING(
+        [--with-linux-extra=<extra_kernel_makefile_args>]
+    ),
+    [
+        linux_extraargs=[$withval]
+    ],
+    [
+        linux_extraargs=
+    ]
+)
+
 AC_MSG_CHECKING([for Linux kernel sources])
 
 if test \! -r ${sourcedir}/.config; then
@@ -147,6 +159,7 @@ linuxversion=`echo $kernelrelease | grep -oE "$regex"`
 
 AC_SUBST(LINUX_SOURCE_DIR,[$sourcedir])
 AC_MSG_RESULT([$LINUX_SOURCE_DIR (Kernel $linuxversion)])
+AC_SUBST(LINUX_EXTRA,[$linux_extraargs])
 
 fi
 
