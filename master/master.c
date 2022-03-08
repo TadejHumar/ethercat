@@ -256,6 +256,7 @@ int ec_master_init(ec_master_t *master, /**< EtherCAT master */
 #ifdef EC_EOE
     master->eoe_thread = NULL;
     INIT_LIST_HEAD(&master->eoe_handlers);
+    INIT_LIST_HEAD(&master->eoe_garbage);
 #endif
 
     ec_lock_init(&master->io_sem);
@@ -448,6 +449,7 @@ void ec_master_clear(
 #ifdef EC_EOE
     // free all EoE handlers
     ec_master_clear_eoe_handlers(master, 1);
+    ec_master_gc_eoe_handlers(master);
 #endif
     ec_master_clear_domains(master);
     ec_master_clear_slave_configs(master);
@@ -495,12 +497,24 @@ void ec_master_clear_eoe_handlers(
         if (free_all || eoe->auto_created) {
             // free_all or auto created eoe: clear and free
             list_del(&eoe->list);
-            ec_eoe_clear(eoe);
-            kfree(eoe);
+            list_add_tail(&eoe->list, &master->eoe_garbage);
         } else {
             // manaully created eoe: clear slave ref
             ec_eoe_clear_slave(eoe);
         }
+    }
+}
+
+/** Finalize cleanup of EoE handlers; must be called with
+ *  master_sem unlocked!
+ */
+void ec_master_gc_eoe_handlers(ec_master_t *master)
+{
+    ec_eoe_t *eoe, *next;
+    list_for_each_entry_safe(eoe, next, &master->eoe_garbage, list) {
+        list_del(&eoe->list);
+        ec_eoe_clear(eoe);
+        kfree(eoe);
     }
 }
 #endif
@@ -1922,6 +1936,9 @@ static int ec_master_idle_thread(void *priv_data)
 
         ec_lock_up(&master->master_sem);
 
+        // cleanup eoe handers without holding master_sem
+        ec_master_gc_eoe_handlers(master);
+
         // queue and send
         ec_lock_down(&master->io_sem);
         if (fsm_exec) {
@@ -1990,6 +2007,9 @@ static int ec_master_operation_thread(void *priv_data)
             }
 
             ec_lock_up(&master->master_sem);
+
+            // cleanup eoe handers without holding master_sem
+            ec_master_gc_eoe_handlers(master);
         }
 
 #ifdef EC_USE_HRTIMER
@@ -2176,7 +2196,7 @@ static int ec_master_eoe_thread(void *priv_data)
             }
         }
         ec_lock_up(&master->master_sem);
-        
+
         if (none_open) {
             goto schedule;
         }
@@ -4106,9 +4126,16 @@ int ecrt_master_eoe_delif(ec_master_t *master,
     list_for_each_entry(eoe, &master->eoe_handlers, list) {
         if (strncmp(name, ec_eoe_name(eoe), EC_DATAGRAM_NAME_SIZE) == 0) {
             list_del(&eoe->list);
+            /* Unlock master before clearing eoe to avoid deadlock;
+             *   ec_eoc_clear() -> unregister_netdev() -> ec_eoedev_stop()
+             * which takes the master_sem. Also note that unregister_netdev()
+             * does lock the rtnl before calling ec_eoedev_stop() which
+             * could also lead to two threads deadlocking if we didn't
+             * release master_sem here!
+             */
+            ec_lock_up(&master->master_sem);
             ec_eoe_clear(eoe);
             kfree(eoe);
-            ec_lock_up(&master->master_sem);
             return 0;
         }
     }

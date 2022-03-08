@@ -106,6 +106,8 @@ struct ec_eoe
     unsigned int tx_idle; /**< Idle flag. */
 
     unsigned int tries; /**< Tries. */
+
+    spinlock_t   tx_lock; /**< Protect slave, tx_ring, tx_next_to_use, tx_next_to_clean, tx_ring_count, tx_queue_active from BH */
 };
 
 /*****************************************************************************/
