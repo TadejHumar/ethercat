@@ -2246,10 +2246,23 @@ schedule:
         if (all_idle) {
             set_current_state(TASK_INTERRUPTIBLE);
             schedule_timeout(1);
+            if ( signal_pending( current ) ) {
+                /* Immediately break the loop; we'll wait for the 'kthread_stop' below;
+                 * if we didn't we would never sleep during a subsequent loop iteration
+                 * because the signal remains pending.
+                 */
+                __set_current_state( TASK_RUNNING );
+                break;
+            }
         } else {
             schedule();
         }
     }
+
+    /* Clear and block pending signal (otherwise we'll never sleep in the loop below
+     * while the signal is pending...
+     */
+	disallow_signal( SIGKILL );
 
 	/* If we broke the loop because we got a signal while
 	 * blocking for the master_sem we still must wait for
