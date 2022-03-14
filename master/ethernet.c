@@ -1298,6 +1298,7 @@ int ec_eoedev_tx(struct sk_buff *skb, /**< transmit socket buffer */
         EC_SLAVE_WARN(eoe->slave, "EoE TX frame (%u octets)"
                 " exceeds MTU. dropping.\n", skb->len);
         eoe->stats.tx_dropped++;
+        spin_unlock_bh( &eoe->tx_lock );
         dev_kfree_skb(skb);
         return 0;
     }
