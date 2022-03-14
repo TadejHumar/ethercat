@@ -2413,17 +2413,17 @@ static ATTRIBUTES int ec_ioctl_send(
     up( & master->io_sem );
 #else
     if (master->send_cb != NULL) {
-		/* The internal_callback was installed by the 'activate' ioctl.
-		 * this already uses the io_sem for synchronization with the
-		 * EoE thread. T.S., 2/2022
-		 */
+        /* The internal_callback was installed by the 'activate' ioctl.
+         * this already uses the io_sem for synchronization with the
+         * EoE thread. T.S., 2/2022
+         */
         master->send_cb(master->cb_data);
         sent_bytes = 0;
     } else {
-		down( & master->io_sem );
-		sent_bytes = ecrt_master_send(master);
-		up( & master->io_sem );
-	}
+        down( & master->io_sem );
+        sent_bytes = ecrt_master_send(master);
+        up( & master->io_sem );
+    }
 #endif
 
     ec_ioctl_lock_up(&master->master_sem);
@@ -2462,16 +2462,16 @@ static ATTRIBUTES int ec_ioctl_receive(
     up( & master->io_sem );
 #else
     if (master->receive_cb != NULL)
-		/* The internal_callback was installed by the 'activate' ioctl.
-		 * this already uses the io_sem for synchronization with the
-		 * EoE thread. T.S., 2/2022
-		 */
-	     master->receive_cb(master->cb_data);
+        /* The internal_callback was installed by the 'activate' ioctl.
+         * this already uses the io_sem for synchronization with the
+         * EoE thread. T.S., 2/2022
+         */
+        master->receive_cb(master->cb_data);
     else {
-		down( & master->io_sem );
+        down( & master->io_sem );
         ecrt_master_receive(master);
-		up( & master->io_sem );
-	}
+        up( & master->io_sem );
+    }
 #endif
 
     ec_ioctl_lock_up(&master->master_sem);

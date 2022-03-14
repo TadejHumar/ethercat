@@ -627,7 +627,7 @@ int ec_eoe_send(ec_eoe_t *eoe /**< EoE handler */)
     {
     unsigned queued_frames;
     spin_lock_bh( &eoe->tx_lock );
-        queued_frames = ec_eoe_tx_queued_frames(eoe);
+    queued_frames = ec_eoe_tx_queued_frames(eoe);
     spin_unlock_bh( &eoe->tx_lock );
     EC_SLAVE_DBG(eoe->slave, 0, "EoE %s TX sending fragment %u%s"
             " with %zu octets (%zu). %u frames queued.\n",
@@ -1050,9 +1050,9 @@ void ec_eoe_state_tx_start(ec_eoe_t *eoe /**< EoE handler */)
             eoe->tx_queue_active = 1;
             netif_wake_queue(eoe->dev);
         }
+        spin_unlock_bh(&eoe->tx_lock);
 
         eoe->tx_idle = 1;
-        spin_unlock_bh(&eoe->tx_lock);
         // no data available.
         // start a new receive immediately.
         ec_eoe_state_rx_start(eoe);
@@ -1288,7 +1288,7 @@ int ec_eoedev_tx(struct sk_buff *skb, /**< transmit socket buffer */
 
         if (skb) {
             dev_kfree_skb(skb);
-		}
+        }
         
         return NETDEV_TX_OK;
     }
@@ -1343,7 +1343,7 @@ struct net_device_stats *ec_eoedev_stats(
         )
 {
     ec_eoe_t *eoe = *((ec_eoe_t **) netdev_priv(dev));
-    /* BUG: unprotected stats */
+    /* NOTE: stats not protected by locking */
     return &eoe->stats;
 }
 
