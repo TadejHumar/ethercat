@@ -2178,7 +2178,6 @@ static int ec_master_eoe_thread(void *priv_data)
 
     allow_signal( SIGKILL );
 
-
     while (!kthread_should_stop()) {
         none_open = 1;
         all_idle = 1;
@@ -2241,7 +2240,7 @@ schedule:
             schedule_timeout(1);
             if ( signal_pending( current ) ) {
                 /* Immediately break the loop; we'll wait for the 'kthread_stop' below;
-                 * if we didn't we would never sleep during a subsequent loop iteration
+                 * if we didn't break we would never sleep during a subsequent loop iteration
                  * because the signal remains pending.
                  */
                 __set_current_state( TASK_RUNNING );
@@ -2252,14 +2251,13 @@ schedule:
         }
     }
 
-    /* Clear and block pending signal (otherwise we'll never sleep in the loop below
-     * while the signal is pending...
+    /* Clear and block pending signal (otherwise we'll never sleep in
+     * the loop below while the signal is pending)...
      */
     disallow_signal( SIGKILL );
 
-    /* If we broke the loop because we got a signal while
-     * blocking for the master_sem we still must wait for
-     * the 'stop' flag...
+    /* If we broke the loop due to a signal then
+     * we still must wait for the 'stop' flag...
      */
     for ( ;; ) {
         set_current_state( TASK_INTERRUPTIBLE );
