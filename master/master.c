@@ -117,13 +117,6 @@ void ec_master_find_dc_ref_clock(ec_master_t *);
 void ec_master_clear_device_stats(ec_master_t *);
 void ec_master_update_device_stats(ec_master_t *);
 
-static void ptsnow(void)
-{
-	struct timespec now;
-	getnstimeofday( &now );
-	printk(KERN_INFO "Time now %lu.%09lu\n", now.tv_sec, now.tv_nsec);
-}
-
 /*****************************************************************************/
 
 /** Static variables initializer.
@@ -2080,10 +2073,10 @@ void ec_master_eoe_stop(ec_master_t *master /**< EtherCAT master */)
     if (master->eoe_thread) {
         EC_MASTER_INFO(master, "Stopping EoE thread.\n");
 
-		/* Send a signal - in case the caller hold the master_sem
-		 * (fsm_master); this will wake up the eoe_thread...
-		 */
-		send_sig_info( SIGKILL, SEND_SIG_PRIV, master->eoe_thread );
+        /* Send a signal - in case the caller hold the master_sem
+         * (fsm_master); this will wake up the eoe_thread...
+         */
+        send_sig_info( SIGKILL, SEND_SIG_PRIV, master->eoe_thread );
 
         kthread_stop(master->eoe_thread);
         master->eoe_thread = NULL;
@@ -2183,7 +2176,7 @@ static int ec_master_eoe_thread(void *priv_data)
 
     EC_MASTER_DBG(master, 1, "EoE thread running.\n");
 
-	allow_signal( SIGKILL );
+    allow_signal( SIGKILL );
 
 
     while (!kthread_should_stop()) {
@@ -2191,8 +2184,8 @@ static int ec_master_eoe_thread(void *priv_data)
         all_idle = 1;
 
         if ( ec_lock_down_interruptible(&master->master_sem) ) {
-			break;
-		}
+            break;
+        }
         list_for_each_entry(eoe, &master->eoe_handlers, list) {
             if (ec_eoe_is_open(eoe)) {
                 none_open = 0;
@@ -2210,8 +2203,8 @@ static int ec_master_eoe_thread(void *priv_data)
 
         // actual EoE processing
         if ( ec_lock_down_interruptible(&master->master_sem) ) {
-			break;
-		}
+            break;
+        }
         sth_to_send = 0;
         list_for_each_entry(eoe, &master->eoe_handlers, list) {
             if ( eoe->slave && 
@@ -2230,9 +2223,9 @@ static int ec_master_eoe_thread(void *priv_data)
         ec_lock_up(&master->master_sem);
 
         if (sth_to_send) {
-			if ( ec_lock_down_interruptible(&master->master_sem) ) {
-				break;
-			}
+            if ( ec_lock_down_interruptible(&master->master_sem) ) {
+                break;
+            }
             list_for_each_entry(eoe, &master->eoe_handlers, list) {
                 ec_eoe_queue(eoe);
             }
@@ -2262,20 +2255,20 @@ schedule:
     /* Clear and block pending signal (otherwise we'll never sleep in the loop below
      * while the signal is pending...
      */
-	disallow_signal( SIGKILL );
+    disallow_signal( SIGKILL );
 
-	/* If we broke the loop because we got a signal while
-	 * blocking for the master_sem we still must wait for
-	 * the 'stop' flag...
-	 */
-	for ( ;; ) {
-		set_current_state( TASK_INTERRUPTIBLE );
-		if ( kthread_should_stop() ) {
-			break;
-		}
-		schedule();
-	}
-	__set_current_state( TASK_RUNNING );
+    /* If we broke the loop because we got a signal while
+     * blocking for the master_sem we still must wait for
+     * the 'stop' flag...
+     */
+    for ( ;; ) {
+        set_current_state( TASK_INTERRUPTIBLE );
+        if ( kthread_should_stop() ) {
+            break;
+        }
+        schedule();
+    }
+    __set_current_state( TASK_RUNNING );
 
     EC_MASTER_DBG(master, 1, "EoE thread exiting...\n");
     return 0;
@@ -2887,7 +2880,7 @@ ec_domain_t *ecrt_master_create_domain(
 
 int ecrt_master_setup_domain_memory(ec_master_t *master)
 {
-	// not currently supported
+    // not currently supported
     return -ENOMEM;  // FIXME
 }
 
@@ -3065,8 +3058,6 @@ void ecrt_master_deactivate(ec_master_t *master)
 
 /*****************************************************************************/
 
-static int printed = 0;
-
 size_t ecrt_master_send(ec_master_t *master)
 {
     ec_datagram_t *datagram, *n;
@@ -3105,10 +3096,6 @@ size_t ecrt_master_send(ec_master_t *master)
             ec_device_clear_stats(&master->devices[dev_idx]);
             continue;
         }
-		if ( ! printed ) {
-			ptsnow();
-			printed = 1;
-		}
 
         // send frames
         sent_bytes = max(sent_bytes,
@@ -3164,7 +3151,6 @@ void ecrt_master_receive(ec_master_t *master)
                 EC_MASTER_DBG(master, 0, "TIMED OUT datagram %p,"
                         " index %02X waited %u us.\n",
                         datagram, datagram->index, time_us);
-				ptsnow();
             }
 #endif /* RT_SYSLOG */
         }
@@ -3514,7 +3500,7 @@ int ecrt_master_64bit_reference_clock_time(ec_master_t *master, uint64_t *time)
     }
 
     if (!master->dc_offset_valid) {
-    	return -EAGAIN;
+        return -EAGAIN;
     }
 
     // Get returned datagram time, transmission delay removed.
