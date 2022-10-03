@@ -121,17 +121,23 @@ void ec_master_update_device_stats(ec_master_t *);
 
 /** Static variables initializer.
 */
-void ec_master_init_static(void)
+void ec_master_init_static(unsigned long ec_io_timeout, unsigned long ec_sdo_injection_timeout)
 {
+    if ( ec_io_timeout < EC_IO_TIMEOUT ) {
+        ec_io_timeout = EC_IO_TIMEOUT;
+    }
+    if ( ec_sdo_injection_timeout < EC_SDO_INJECTION_TIMEOUT ) {
+        ec_sdo_injection_timeout = EC_SDO_INJECTION_TIMEOUT;
+    }
 #ifdef EC_HAVE_CYCLES
-    timeout_cycles = (cycles_t) EC_IO_TIMEOUT /* us */ * (cpu_khz / 1000);
+    timeout_cycles = (cycles_t) ec_io_timeout /* us */ * (cpu_khz / 1000);
     ext_injection_timeout_cycles =
-        (cycles_t) EC_SDO_INJECTION_TIMEOUT /* us */ * (cpu_khz / 1000);
+        (cycles_t) ec_sdo_injection_timeout /* us */ * (cpu_khz / 1000);
 #else
     // one jiffy may always elapse between time measurement
-    timeout_jiffies = max(EC_IO_TIMEOUT * HZ / 1000000, 1);
+    timeout_jiffies = max(ec_io_timeout * HZ / 1000000, 1);
     ext_injection_timeout_jiffies =
-        max(EC_SDO_INJECTION_TIMEOUT * HZ / 1000000, 1);
+        max(ec_sdo_injection_timeout * HZ / 1000000, 1);
 #endif
 }
 

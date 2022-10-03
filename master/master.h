@@ -343,7 +343,7 @@ struct ec_master {
 /*****************************************************************************/
 
 // static funtions
-void ec_master_init_static(void);
+void ec_master_init_static(unsigned long ec_io_timeout, unsigned long ec_sdo_injection_timeout);
 
 // master creation/deletion
 int ec_master_init(ec_master_t *, unsigned int, const uint8_t *,
