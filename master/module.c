@@ -65,6 +65,8 @@ bool eoe_autocreate = 1;  /**< Auto-create EOE interfaces. */
 #endif
 static unsigned int debug_level;  /**< Debug level parameter. */
 unsigned long pcap_size;  /**< Pcap buffer size in bytes. */
+static unsigned long ec_io_timeout; /**< IO timeout in us */
+static unsigned long ec_sdo_injection_timeout; /**< SDO injection timeout in us */
 
 static ec_master_t *masters; /**< Array of masters. */
 static ec_lock_t master_sem; /**< Master semaphore. */
@@ -99,6 +101,10 @@ module_param_named(debug_level, debug_level, uint, S_IRUGO);
 MODULE_PARM_DESC(debug_level, "Debug level");
 module_param_named(pcap_size, pcap_size, ulong, S_IRUGO);
 MODULE_PARM_DESC(pcap_size, "Pcap buffer size");
+module_param_named(ec_io_timeout, ec_io_timeout, ulong, S_IRUGO);
+MODULE_PARM_DESC(ec_io_timeout, "IO timeout [us]");
+module_param_named(ec_sdo_injection_timeout, ec_sdo_injection_timeout, ulong, S_IRUGO);
+MODULE_PARM_DESC(ec_sdo_injection_timeout, "SDO injection timeout [us]");
 
 /** \endcond */
 
@@ -150,7 +156,7 @@ int __init ec_init_module(void)
     }
 
     // initialize static master variables
-    ec_master_init_static();
+    ec_master_init_static(ec_io_timeout, ec_sdo_injection_timeout);
 
     if (master_count) {
         if (!(masters = kmalloc(sizeof(ec_master_t) * master_count,
