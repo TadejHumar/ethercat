@@ -219,7 +219,7 @@ int ec_foe_prepare_data_send(
     uint8_t *data;
 
     remaining_size = fsm->buffer_size - fsm->buffer_offset;
-    current_size = fsm->slave->configured_tx_mailbox_size
+    current_size = fsm->slave->configured_rx_mailbox_size
             - EC_MBOX_HEADER_SIZE - EC_FOE_HEADER_SIZE;
 
     if (remaining_size < current_size) {
