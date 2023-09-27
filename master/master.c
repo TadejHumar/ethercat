@@ -121,17 +121,23 @@ void ec_master_update_device_stats(ec_master_t *);
 
 /** Static variables initializer.
 */
-void ec_master_init_static(void)
+void ec_master_init_static(unsigned long ec_io_timeout, unsigned long ec_sdo_injection_timeout)
 {
+    if ( ec_io_timeout < EC_IO_TIMEOUT ) {
+        ec_io_timeout = EC_IO_TIMEOUT;
+    }
+    if ( ec_sdo_injection_timeout < EC_SDO_INJECTION_TIMEOUT ) {
+        ec_sdo_injection_timeout = EC_SDO_INJECTION_TIMEOUT;
+    }
 #ifdef EC_HAVE_CYCLES
-    timeout_cycles = (cycles_t) EC_IO_TIMEOUT /* us */ * (cpu_khz / 1000);
+    timeout_cycles = (cycles_t) ec_io_timeout /* us */ * (cpu_khz / 1000);
     ext_injection_timeout_cycles =
-        (cycles_t) EC_SDO_INJECTION_TIMEOUT /* us */ * (cpu_khz / 1000);
+        (cycles_t) ec_sdo_injection_timeout /* us */ * (cpu_khz / 1000);
 #else
     // one jiffy may always elapse between time measurement
-    timeout_jiffies = max(EC_IO_TIMEOUT * HZ / 1000000, 1);
+    timeout_jiffies = max(ec_io_timeout * HZ / 1000000, (unsigned long)1);
     ext_injection_timeout_jiffies =
-        max(EC_SDO_INJECTION_TIMEOUT * HZ / 1000000, 1);
+        max(ec_sdo_injection_timeout * HZ / 1000000, (unsigned long)1);
 #endif
 }
 
@@ -249,6 +255,7 @@ int ec_master_init(ec_master_t *master, /**< EtherCAT master */
 #ifdef EC_EOE
     master->eoe_thread = NULL;
     INIT_LIST_HEAD(&master->eoe_handlers);
+    INIT_LIST_HEAD(&master->eoe_garbage);
 #endif
 
     ec_lock_init(&master->io_sem);
@@ -441,6 +448,7 @@ void ec_master_clear(
 #ifdef EC_EOE
     // free all EoE handlers
     ec_master_clear_eoe_handlers(master, 1);
+    ec_master_gc_eoe_handlers(master);
 #endif
     ec_master_clear_domains(master);
     ec_master_clear_slave_configs(master);
@@ -488,12 +496,24 @@ void ec_master_clear_eoe_handlers(
         if (free_all || eoe->auto_created) {
             // free_all or auto created eoe: clear and free
             list_del(&eoe->list);
-            ec_eoe_clear(eoe);
-            kfree(eoe);
+            list_add_tail(&eoe->list, &master->eoe_garbage);
         } else {
             // manaully created eoe: clear slave ref
             ec_eoe_clear_slave(eoe);
         }
+    }
+}
+
+/** Finalize cleanup of EoE handlers; must be called with
+ *  master_sem unlocked!
+ */
+void ec_master_gc_eoe_handlers(ec_master_t *master)
+{
+    ec_eoe_t *eoe, *next;
+    list_for_each_entry_safe(eoe, next, &master->eoe_garbage, list) {
+        list_del(&eoe->list);
+        ec_eoe_clear(eoe);
+        kfree(eoe);
     }
 }
 #endif
@@ -1915,6 +1935,11 @@ static int ec_master_idle_thread(void *priv_data)
 
         ec_lock_up(&master->master_sem);
 
+#ifdef EC_EOE
+        // cleanup eoe handers without holding master_sem
+        ec_master_gc_eoe_handlers(master);
+#endif
+
         // queue and send
         ec_lock_down(&master->io_sem);
         if (fsm_exec) {
@@ -1983,6 +2008,11 @@ static int ec_master_operation_thread(void *priv_data)
             }
 
             ec_lock_up(&master->master_sem);
+
+#ifdef EC_EOE
+            // cleanup eoe handers without holding master_sem
+            ec_master_gc_eoe_handlers(master);
+#endif
         }
 
 #ifdef EC_USE_HRTIMER
@@ -2048,6 +2078,11 @@ void ec_master_eoe_stop(ec_master_t *master /**< EtherCAT master */)
 {
     if (master->eoe_thread) {
         EC_MASTER_INFO(master, "Stopping EoE thread.\n");
+
+        /* Send a signal - in case the caller hold the master_sem
+         * (fsm_master); this will wake up the eoe_thread...
+         */
+        send_sig_info( SIGKILL, SEND_SIG_PRIV, master->eoe_thread );
 
         kthread_stop(master->eoe_thread);
         master->eoe_thread = NULL;
@@ -2147,11 +2182,15 @@ static int ec_master_eoe_thread(void *priv_data)
 
     EC_MASTER_DBG(master, 1, "EoE thread running.\n");
 
+    allow_signal( SIGKILL );
+
     while (!kthread_should_stop()) {
         none_open = 1;
         all_idle = 1;
 
-        ec_lock_down(&master->master_sem);
+        if ( ec_lock_down_interruptible(&master->master_sem) ) {
+            break;
+        }
         list_for_each_entry(eoe, &master->eoe_handlers, list) {
             if (ec_eoe_is_open(eoe)) {
                 none_open = 0;
@@ -2159,7 +2198,7 @@ static int ec_master_eoe_thread(void *priv_data)
             }
         }
         ec_lock_up(&master->master_sem);
-        
+
         if (none_open) {
             goto schedule;
         }
@@ -2168,7 +2207,9 @@ static int ec_master_eoe_thread(void *priv_data)
         master->receive_cb(master->cb_data);
 
         // actual EoE processing
-        ec_lock_down(&master->master_sem);
+        if ( ec_lock_down_interruptible(&master->master_sem) ) {
+            break;
+        }
         sth_to_send = 0;
         list_for_each_entry(eoe, &master->eoe_handlers, list) {
             if ( eoe->slave && 
@@ -2187,7 +2228,9 @@ static int ec_master_eoe_thread(void *priv_data)
         ec_lock_up(&master->master_sem);
 
         if (sth_to_send) {
-            ec_lock_down(&master->master_sem);
+            if ( ec_lock_down_interruptible(&master->master_sem) ) {
+                break;
+            }
             list_for_each_entry(eoe, &master->eoe_handlers, list) {
                 ec_eoe_queue(eoe);
             }
@@ -2201,10 +2244,35 @@ schedule:
         if (all_idle) {
             set_current_state(TASK_INTERRUPTIBLE);
             schedule_timeout(1);
+            if ( signal_pending( current ) ) {
+                /* Immediately break the loop; we'll wait for the 'kthread_stop' below;
+                 * if we didn't break we would never sleep during a subsequent loop iteration
+                 * because the signal remains pending.
+                 */
+                __set_current_state( TASK_RUNNING );
+                break;
+            }
         } else {
             schedule();
         }
     }
+
+    /* Clear and block pending signal (otherwise we'll never sleep in
+     * the loop below while the signal is pending)...
+     */
+    disallow_signal( SIGKILL );
+
+    /* If we broke the loop due to a signal then
+     * we still must wait for the 'stop' flag...
+     */
+    for ( ;; ) {
+        set_current_state( TASK_INTERRUPTIBLE );
+        if ( kthread_should_stop() ) {
+            break;
+        }
+        schedule();
+    }
+    __set_current_state( TASK_RUNNING );
 
     EC_MASTER_DBG(master, 1, "EoE thread exiting...\n");
     return 0;
@@ -2816,7 +2884,7 @@ ec_domain_t *ecrt_master_create_domain(
 
 int ecrt_master_setup_domain_memory(ec_master_t *master)
 {
-	// not currently supported
+    // not currently supported
     return -ENOMEM;  // FIXME
 }
 
@@ -3436,7 +3504,7 @@ int ecrt_master_64bit_reference_clock_time(ec_master_t *master, uint64_t *time)
     }
 
     if (!master->dc_offset_valid) {
-    	return -EAGAIN;
+        return -EAGAIN;
     }
 
     // Get returned datagram time, transmission delay removed.
@@ -4065,9 +4133,16 @@ int ecrt_master_eoe_delif(ec_master_t *master,
     list_for_each_entry(eoe, &master->eoe_handlers, list) {
         if (strncmp(name, ec_eoe_name(eoe), EC_DATAGRAM_NAME_SIZE) == 0) {
             list_del(&eoe->list);
+            /* Unlock master before clearing eoe to avoid deadlock;
+             *   ec_eoc_clear() -> unregister_netdev() -> ec_eoedev_stop()
+             * which takes the master_sem. Also note that unregister_netdev()
+             * does lock the rtnl before calling ec_eoedev_stop() which
+             * could also lead to two threads deadlocking if we didn't
+             * release master_sem here!
+             */
+            ec_lock_up(&master->master_sem);
             ec_eoe_clear(eoe);
             kfree(eoe);
-            ec_lock_up(&master->master_sem);
             return 0;
         }
     }

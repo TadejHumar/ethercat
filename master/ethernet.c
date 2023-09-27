@@ -251,6 +251,8 @@ int ec_eoe_init(
     eoe->rx_idle = 1;
     eoe->tx_idle = 1;
 
+    spin_lock_init(&eoe->tx_lock);
+
     /* device name eoe<MASTER>[as]<SLAVE>, because networking scripts don't
      * like hyphens etc. in interface names. */
     if (alias) {
@@ -353,6 +355,10 @@ int ec_eoe_init(
     priv = netdev_priv(eoe->dev);
     *priv = eoe;
 
+    // set carrier off status BEFORE open */
+    EC_MASTER_DBG(eoe->master, 1, "%s: carrier off.\n", eoe->dev->name);
+    netif_carrier_off(eoe->dev);
+
     // connect the net_device to the kernel
     ret = register_netdev(eoe->dev);
     if (ret) {
@@ -360,10 +366,6 @@ int ec_eoe_init(
                 " error %i\n", eoe->dev->name, ret);
         goto out_free;
     }
-
-    // set carrier off status BEFORE open */
-    EC_MASTER_DBG(eoe->master, 1, "%s: carrier off.\n", eoe->dev->name);
-    netif_carrier_off(eoe->dev);
 
     return 0;
 
@@ -414,12 +416,12 @@ void ec_eoe_link_slave(
         ec_slave_t *slave /**< EtherCAT slave */
         )
 {
+
+    spin_lock_bh( &eoe->tx_lock );
+
     eoe->slave = slave;
 
     if (eoe->slave) {
-        EC_SLAVE_INFO(slave, "Linked to EoE handler %s\n",
-                eoe->dev->name);
-
         // Usually setting the MTU appropriately makes the upper layers
         // do the frame fragmenting. In some cases this doesn't work
         // so the MTU is left on the Ethernet standard value and fragmenting
@@ -427,14 +429,19 @@ void ec_eoe_link_slave(
 #if 0
         eoe->dev->mtu = slave->configured_rx_mailbox_size - ETH_HLEN - 10;
 #endif
+        netif_carrier_on(eoe->dev);
+        spin_unlock_bh( &eoe->tx_lock );
+
+        EC_SLAVE_INFO(slave, "Linked to EoE handler %s\n",
+                eoe->dev->name);
 
         EC_MASTER_DBG(eoe->master, 1, "%s: carrier on.\n", eoe->dev->name);
-        netif_carrier_on(eoe->dev);
     } else {
+        netif_carrier_off(eoe->dev);
+        spin_unlock_bh( &eoe->tx_lock );
         EC_MASTER_ERR(eoe->master, "%s : slave not supplied to ec_eoe_link_slave().\n",
                 eoe->dev->name);
         EC_MASTER_DBG(eoe->master, 1, "%s: carrier off.\n", eoe->dev->name);
-        netif_carrier_off(eoe->dev);
     }
 }
 
@@ -452,7 +459,11 @@ void ec_eoe_clear_slave(ec_eoe_t *eoe /**< EoE handler */)
 #endif
 
     EC_MASTER_DBG(eoe->master, 1, "%s: carrier off.\n", eoe->dev->name);
+
+    spin_lock_bh( &eoe->tx_lock );
     netif_carrier_off(eoe->dev);
+    eoe->slave = NULL;
+    spin_unlock_bh( &eoe->tx_lock );
 
     // empty transmit queue
     ec_eoe_flush(eoe);
@@ -471,8 +482,6 @@ void ec_eoe_clear_slave(ec_eoe_t *eoe /**< EoE handler */)
 
     eoe->state = ec_eoe_state_rx_start;
         
-    eoe->slave = NULL;
-
 #if EOE_DEBUG_LEVEL >= 1
     if (slave) {
         EC_MASTER_DBG(eoe->master, 0, "%s slave link cleared.\n", eoe->dev->name);
@@ -484,7 +493,9 @@ void ec_eoe_clear_slave(ec_eoe_t *eoe /**< EoE handler */)
 
 /** EoE destructor.
  *
- * Unregisteres the net_device and frees allocated memory.
+ * Unregisters the net_device and frees allocated memory.
+ *
+ * Caller MUST NOT hold 'master_sem'!
  */
 void ec_eoe_clear(ec_eoe_t *eoe /**< EoE handler */)
 {
@@ -509,6 +520,10 @@ void ec_eoe_clear(ec_eoe_t *eoe /**< EoE handler */)
 /*****************************************************************************/
 
 /** Empties the transmit queue.
+ *
+ * Caller must ensure eoe->slave == NULL or netif_carrier_off() in order
+ * to prevent a softirq handler from accessing the ring we are flushing.
+ *
  */
 void ec_eoe_flush(ec_eoe_t *eoe /**< EoE handler */)
 {
@@ -537,6 +552,9 @@ void ec_eoe_flush(ec_eoe_t *eoe /**< EoE handler */)
 
 /*****************************************************************************/
 
+/*
+ * Caller must hold tx_lock
+ */
 unsigned int ec_eoe_tx_queued_frames(const ec_eoe_t *eoe /**< EoE handler */)
 {
     unsigned int next_to_use = eoe->tx_next_to_use;
@@ -551,6 +569,9 @@ unsigned int ec_eoe_tx_queued_frames(const ec_eoe_t *eoe /**< EoE handler */)
 
 /*****************************************************************************/
 
+/*
+ * Caller must hold tx_lock
+ */
 static unsigned int eoe_tx_unused_frames(ec_eoe_t *eoe /**< EoE handler */)
 {
     unsigned int next_to_use = eoe->tx_next_to_use;
@@ -603,11 +624,17 @@ int ec_eoe_send(ec_eoe_t *eoe /**< EoE handler */)
     }
 
 #if EOE_DEBUG_LEVEL >= 2
+    {
+    unsigned queued_frames;
+    spin_lock_bh( &eoe->tx_lock );
+    queued_frames = ec_eoe_tx_queued_frames(eoe);
+    spin_unlock_bh( &eoe->tx_lock );
     EC_SLAVE_DBG(eoe->slave, 0, "EoE %s TX sending fragment %u%s"
             " with %zu octets (%zu). %u frames queued.\n",
             eoe->dev->name, eoe->tx_fragment_number,
             last_fragment ? "" : "+", current_size, complete_offset,
-            ec_eoe_tx_queued_frames(eoe));
+            queued_frames);
+    }
 #endif
 
 #if EOE_DEBUG_LEVEL >= 3
@@ -1015,12 +1042,15 @@ void ec_eoe_state_tx_start(ec_eoe_t *eoe /**< EoE handler */)
         return;
     }
 
+    spin_lock_bh(&eoe->tx_lock);
+
     if (eoe->tx_next_to_use == eoe->tx_next_to_clean) {
         // check if the queue needs to be restarted
         if (!eoe->tx_queue_active) {
             eoe->tx_queue_active = 1;
             netif_wake_queue(eoe->dev);
         }
+        spin_unlock_bh(&eoe->tx_lock);
 
         eoe->tx_idle = 1;
         // no data available.
@@ -1045,6 +1075,8 @@ void ec_eoe_state_tx_start(ec_eoe_t *eoe /**< EoE handler */)
         wakeup = 1;
 #endif
     }
+
+    spin_unlock_bh(&eoe->tx_lock);
 
     eoe->tx_idle = 0;
 
@@ -1146,6 +1178,23 @@ void ec_eoe_state_tx_sent(ec_eoe_t *eoe /**< EoE handler */)
  *  NET_DEVICE functions
  *****************************************************************************/
 
+/* Synchronization notes:
+ *  - anyone may open/close the network device; we must thus synchronize with
+ *    the 'master_sem'.
+ *  - this is complicated by the fact that 'ec_eoedev_stop()' can be called
+ *    via 'unregister_netdev()' from 'ec_eoe_clear()'. To avoid deadlock
+ *    'ec_eoe_clear()' must not be called with 'master_sem' already locked!
+ *  - other threads but also softirqs may call 'ec_eoedev_tx()'. We introduce
+ *    the 'tx_lock' spinlock to protect the tx ring and associated pointers and
+ *    flags.
+ *  - the tx ring may be safely manipulated ('ec_eoe_flush()') if the caller of
+ *    'ec_eoe_flush()' ensures that 'netif_carrier_off()' or 'eoe->slave == NULL'.
+ *    This prevents 'ec_eoedev_tx()' from accessing the ring. It may still be
+ *    necessary to synchronize with threads using 'master_sem'.
+ *  - statistics and MAC address unprotected ('ec_eoedev_set_mac()',
+ *    'ec_eoedev_stats()')
+ */
+
 /** Opens the virtual network device.
  *
  * \return Always zero (success).
@@ -1154,15 +1203,20 @@ int ec_eoedev_open(struct net_device *dev /**< EoE net_device */)
 {
     ec_eoe_t *eoe = *((ec_eoe_t **) netdev_priv(dev));
 
+    ec_lock_down( &eoe->master->master_sem );
+
     // set carrier to off until we know link status
     EC_MASTER_DBG(eoe->master, 1, "%s: carrier off.\n", dev->name);
+
+    spin_lock_bh( &eoe->tx_lock );
     netif_carrier_off(dev);
+    eoe->tx_queue_active = 1;
+    spin_unlock_bh( &eoe->tx_lock );
 
     ec_eoe_flush(eoe);
     eoe->opened = 1;
     eoe->rx_idle = 0;
     eoe->tx_idle = 0;
-    eoe->tx_queue_active = 1;
     netif_start_queue(dev);
 #if EOE_DEBUG_LEVEL >= 2
     EC_MASTER_DBG(eoe->master, 0, "%s opened.\n", dev->name);
@@ -1171,8 +1225,13 @@ int ec_eoedev_open(struct net_device *dev /**< EoE net_device */)
     // update carrier link status
     if (eoe->slave) {
         EC_MASTER_DBG(eoe->master, 1, "%s: carrier on.\n", dev->name);
+        /* no need for acquiring tx_lock - netif_carrier_on is an atomic operation
+         * and we have no local data to synchronize
+         */
         netif_carrier_on(dev);
     }
+
+    ec_lock_up( &eoe->master->master_sem );
 
     return 0;
 }
@@ -1187,10 +1246,15 @@ int ec_eoedev_stop(struct net_device *dev /**< EoE net_device */)
 {
     ec_eoe_t *eoe = *((ec_eoe_t **) netdev_priv(dev));
     
+    ec_lock_down( &eoe->master->master_sem );
     EC_MASTER_DBG(eoe->master, 1, "%s: carrier off.\n", dev->name);
+
+    spin_lock_bh( &eoe->tx_lock );
     netif_carrier_off(dev);
-    netif_stop_queue(dev);
     eoe->tx_queue_active = 0;
+    spin_unlock_bh( &eoe->tx_lock );
+
+    netif_stop_queue(dev);
     eoe->rx_idle = 1;
     eoe->tx_idle = 1;
     eoe->opened = 0;
@@ -1198,6 +1262,7 @@ int ec_eoedev_stop(struct net_device *dev /**< EoE net_device */)
 #if EOE_DEBUG_LEVEL >= 2
     EC_MASTER_DBG(eoe->master, 0, "%s stopped.\n", dev->name);
 #endif
+    ec_lock_up( &eoe->master->master_sem );
     return 0;
 }
 
@@ -1213,10 +1278,16 @@ int ec_eoedev_tx(struct sk_buff *skb, /**< transmit socket buffer */
 {
     ec_eoe_t *eoe = *((ec_eoe_t **) netdev_priv(dev));
 
-    if (!eoe->slave) {
+    spin_lock_bh( &eoe->tx_lock );
+
+    if (!eoe->slave || !netif_carrier_ok(eoe->dev)) {
+        if (skb) {
+            eoe->stats.tx_dropped++;
+        }
+        spin_unlock_bh( &eoe->tx_lock );
+
         if (skb) {
             dev_kfree_skb(skb);
-            eoe->stats.tx_dropped++;
         }
         
         return NETDEV_TX_OK;
@@ -1226,8 +1297,9 @@ int ec_eoedev_tx(struct sk_buff *skb, /**< transmit socket buffer */
     if (skb->len > eoe->slave->configured_tx_mailbox_size - 10) {
         EC_SLAVE_WARN(eoe->slave, "EoE TX frame (%u octets)"
                 " exceeds MTU. dropping.\n", skb->len);
-        dev_kfree_skb(skb);
         eoe->stats.tx_dropped++;
+        spin_unlock_bh( &eoe->tx_lock );
+        dev_kfree_skb(skb);
         return 0;
     }
 #endif
@@ -1255,6 +1327,8 @@ int ec_eoedev_tx(struct sk_buff *skb, /**< transmit socket buffer */
     }
 #endif
 
+    spin_unlock_bh( &eoe->tx_lock );
+
     return 0;
 }
 
@@ -1269,6 +1343,7 @@ struct net_device_stats *ec_eoedev_stats(
         )
 {
     ec_eoe_t *eoe = *((ec_eoe_t **) netdev_priv(dev));
+    /* NOTE: stats not protected by locking */
     return &eoe->stats;
 }
 
