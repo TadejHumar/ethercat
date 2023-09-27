@@ -135,9 +135,9 @@ void ec_master_init_static(unsigned long ec_io_timeout, unsigned long ec_sdo_inj
         (cycles_t) ec_sdo_injection_timeout /* us */ * (cpu_khz / 1000);
 #else
     // one jiffy may always elapse between time measurement
-    timeout_jiffies = max(ec_io_timeout * HZ / 1000000, 1);
+    timeout_jiffies = max(ec_io_timeout * HZ / 1000000, (unsigned long)1);
     ext_injection_timeout_jiffies =
-        max(ec_sdo_injection_timeout * HZ / 1000000, 1);
+        max(ec_sdo_injection_timeout * HZ / 1000000, (unsigned long)1);
 #endif
 }
 
